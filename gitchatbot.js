@@ -1,4 +1,5 @@
-import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
+import { ChatOpenAI } from "@langchain/openai";
+import { HuggingFaceInferenceEmbeddings } from "@langchain/community/embeddings/hf";
 import { FaissStore } from "@langchain/community/vectorstores/faiss";
 import { createRetrieverTool } from "langchain/tools/retriever";
 import { HumanMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
@@ -17,14 +18,21 @@ dotenv.config();
 const DB_FAISS_PATH = "./vectorstore/db_faiss";
 
 /**
- * RAG Chatbot class using LangGraph and OpenAI
+ * RAG Chatbot class using LangGraph and GitHub Models
  */
 class RAGChatbot {
     constructor(dbPath) {
+        // Configure the LLM to use the GitHub Models endpoint and token for chat
         this.llm = new ChatOpenAI({
-            modelName: "gpt-3.5-turbo",
+            modelName: "openai/gpt-4.1", // Use the model name from the GitHub Marketplace
             temperature: 0,
+            apiKey: process.env.GITHUB_TOKEN,
+            configuration: {
+                baseURL: process.env.GITHUB_MODELS_ENDPOINT,
+            },
         });
+        console.log("Using GitHub Models endpoint for chat.");
+
         this.dbPath = dbPath;
         this.app = null;
     }
@@ -34,7 +42,6 @@ class RAGChatbot {
             this.app = await this._buildGraph(this.dbPath);
         } catch (error) {
             console.error("Error initializing chatbot:", error);
-            // Re-throw the error to be caught by the main execution block
             throw error;
         }
     }
@@ -43,21 +50,22 @@ class RAGChatbot {
      * Builds the conversational graph for the chatbot
      */
     async _buildGraph(dbPath) {
-        // Check if database exists
         if (!fs.existsSync(dbPath)) {
             throw new Error(`Vector database not found at ${dbPath}. Please run create-db.js first.`);
         }
 
         // --- 1. Load the Vector DB ---
         console.log("Loading vector database...");
-        const embeddings = new OpenAIEmbeddings({
-            modelName: "text-embedding-3-small",
+        // UPDATED: Use Hugging Face for loading embeddings
+        const embeddings = new HuggingFaceInferenceEmbeddings({
+            apiKey: process.env.HF_TOKEN,
+            model: "sentence-transformers/all-MiniLM-L6-v2",
         });
+        console.log("Using Hugging Face to load embeddings.");
+
 
         const vectorStore = await FaissStore.load(dbPath, embeddings);
-        const retriever = vectorStore.asRetriever({
-            k: 5, // Return top 5 most relevant chunks
-        });
+        const retriever = vectorStore.asRetriever({ k: 5 });
 
         // --- 2. Create the Retriever Tool ---
         const tool = createRetrieverTool(retriever, {
@@ -90,11 +98,7 @@ IMPORTANT GUIDELINES:
 
 Answer based solely on the document context provided.`;
 
-            const messagesWithPrompt = [
-                new HumanMessage(systemPrompt),
-                ...messages
-            ];
-
+            const messagesWithPrompt = [new HumanMessage(systemPrompt), ...messages];
             const response = await llmWithTools.invoke(messagesWithPrompt);
             return { messages: [response] };
         };
@@ -103,35 +107,22 @@ Answer based solely on the document context provided.`;
             const lastMessage = state.messages[state.messages.length - 1];
             const toolCall = lastMessage.tool_calls[0];
             const toolOutput = await tool.invoke(toolCall.args);
-            
             return {
-                messages: [
-                    new ToolMessage({
-                        content: String(toolOutput),
-                        tool_call_id: toolCall.id,
-                    }),
-                ],
+                messages: [new ToolMessage({ content: String(toolOutput), tool_call_id: toolCall.id })],
             };
         };
 
         // --- 4. Construct the Graph ---
         const workflow = new StateGraph({
             channels: {
-                messages: {
-                    reducer: (x, y) => x.concat(y),
-                    default: () => [],
-                },
+                messages: { reducer: (x, y) => x.concat(y), default: () => [] },
             },
         });
 
         workflow.addNode("agent", callModel);
         workflow.addNode("action", callToolNode);
-
         workflow.setEntryPoint("agent");
-        workflow.addConditionalEdges("agent", shouldContinue, {
-            continue: "action",
-            end: END,
-        });
+        workflow.addConditionalEdges("agent", shouldContinue, { continue: "action", end: END });
         workflow.addEdge("action", "agent");
 
         // --- 5. Add Memory ---
@@ -143,25 +134,12 @@ Answer based solely on the document context provided.`;
      * Chat with the RAG chatbot
      */
     async chat(question, threadId = "main-conversation") {
-        if (!question.trim()) {
-            return;
-        }
-
-        const config = {
-            configurable: { thread_id: threadId },
-        };
-
+        if (!question.trim()) return;
+        const config = { configurable: { thread_id: threadId } };
         const inputMessage = new HumanMessage(question);
-
         try {
             let finalAnswer = "";
-            
-            // Stream the response from the chatbot
-            const stream = await this.app.stream(
-                { messages: [inputMessage] },
-                config
-            );
-
+            const stream = await this.app.stream({ messages: [inputMessage] }, config);
             for await (const chunk of stream) {
                 for (const [key, value] of Object.entries(chunk)) {
                     if (key === "agent" && value.messages?.length > 0) {
@@ -172,10 +150,7 @@ Answer based solely on the document context provided.`;
                     }
                 }
             }
-
-            if (finalAnswer) {
-                console.log(`\n AI: ${finalAnswer}\n`);
-            }
+            if (finalAnswer) console.log(`\n AI: ${finalAnswer}\n`);
         } catch (error) {
             console.error("Error during chat:", error);
             console.log(" Please try again or check your question.\n");
@@ -186,16 +161,10 @@ Answer based solely on the document context provided.`;
      * Start interactive chat session
      */
     async startChat() {
-        const rl = readline.createInterface({
-            input: process.stdin,
-            output: process.stdout,
-        });
-
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
         const conversationThreadId = "main-conversation";
-        
         console.log("--- RAG Chatbot ---");
         console.log("Ask questions based on your documents. Type 'exit' to end.\n");
-
         const askQuestion = () => {
             rl.question("You: ", async (userInput) => {
                 if (userInput.toLowerCase() === "exit") {
@@ -203,12 +172,10 @@ Answer based solely on the document context provided.`;
                     rl.close();
                     return;
                 }
-
                 await this.chat(userInput, conversationThreadId);
                 askQuestion();
             });
         };
-
         askQuestion();
     }
 }
@@ -217,32 +184,20 @@ Answer based solely on the document context provided.`;
  * Main function to run the chatbot
  */
 async function main() {
-    // Check if API key is set
-    if (!process.env.OPENAI_API_KEY) {
-        console.error("Error: OPENAI_API_KEY environment variable not set.");
-        console.log("Please set your OpenAI API key in the .env file or environment variables.");
+    if (!process.env.GITHUB_TOKEN || !process.env.HF_TOKEN) {
+        console.error("Error: GITHUB_TOKEN or HF_TOKEN environment variable not set.");
         process.exit(1);
     }
-
     try {
-        // 1. Create an instance of the chatbot. This is now a synchronous operation.
         const chatbot = new RAGChatbot(DB_FAISS_PATH);
-        
-        // 2. Await its asynchronous initialization. This ensures the DB is loaded
-        //    and the graph is compiled before proceeding.
         await chatbot.init();
-
-        // 3. Start the interactive chat session. This runs only after init() is successful.
         await chatbot.startChat();
-
     } catch (error) {
-        // Errors from init() or startChat() will be caught here.
         console.error("Error starting chatbot:", error.message);
         process.exit(1);
     }
 }
 
-// Run the main function if this file is executed directly
 const __filename = fileURLToPath(import.meta.url);
 if (resolve(process.argv[1]) === __filename) {
     main().catch(console.error);

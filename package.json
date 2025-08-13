@@ -1,7 +1,6 @@
 {
   "name": "node_chatbot",
   "version": "1.0.0",
-  "description": "",
   "main": "chatbot.js",
   "type": "module",
   "scripts": {
@@ -12,14 +11,24 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@langchain/community": "^0.3.47",
-    "@langchain/langgraph": "^0.3.5",
-    "@langchain/openai": "^0.5.16",
+    "@azure-rest/ai-inference": "^1.0.0-beta.6",
+    "@azure/core-auth": "^1.10.0",
+    "@huggingface/inference": "^4.7.1",
+    "@langchain/community": "^0.3.50",
+    "@langchain/core": "^0.3.70",
+    "@langchain/langgraph": "^0.3.12",
+    "@langchain/openai": "^0.5.18",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
+    "dotenv": "^16.6.1",
     "express": "^5.1.0",
     "faiss-node": "^0.5.1",
-    "langchain": "^0.3.29",
-    "mammoth": "^1.9.1"
-  }
+    "fs": "^0.0.1-security",
+    "langchain": "^0.3.30",
+    "mammoth": "^1.10.0",
+    "path": "^0.12.7"
+  },
+  "directories": {
+    "doc": "docs"
+  },
+  "description": ""
 }
